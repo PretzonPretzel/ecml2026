@@ -82,9 +82,7 @@ class PlannerRuntime:
         self._stop_nodes: Dict[int, Dict[int, tuple]] = {}
         self._served: Dict[int, set] = {}  # agent -> set of served group idxs
         self._dead: set = set()            # permanently deadlocked agents
-        self._corridor_block_until: Dict[int, int] = {}  # seg -> blocked-until time
         self._last_escape: Dict[int, int] = {}
-        self.BLOCK_AGENT = -7
 
     # ------------------------------------------------------------------
     def _setup(self, env):
@@ -544,16 +542,6 @@ class PlannerRuntime:
             if oh in self._dead or not self.plans[oh].visits:
                 return True
         return False
-
-    def _block_corridor(self, env, seg: int):
-        t = env._elapsed_steps
-        g = self.graph
-        until = t + 2 * len(g.corridor_cells[seg]) + 10
-        if self._corridor_block_until.get(seg, -1) >= until:
-            return
-        self._corridor_block_until[seg] = until
-        for cid in g.corridor_cells[seg]:
-            self.res.block(self.BLOCK_AGENT, cid * 2, t, min(until, self.res.horizon))
 
     # ------------------------------------------------------------------
     def act(self, env) -> Dict[int, int]:

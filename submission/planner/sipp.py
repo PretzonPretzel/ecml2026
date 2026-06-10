@@ -203,15 +203,6 @@ class Reservations:
                     owners.add(a)
         return owners
 
-    def earliest_conflicting_owner(self, agent: int, graph: NetGraph, cv: CellVisit):
-        """Owner of the earliest reservation overlapping the visit, or None."""
-        res = graph.resource_of_node(cv.node)
-        for s, e, a in self.intervals.get(res, ()):
-            if a != agent and a >= 0 and s < cv.t_exit and cv.t_enter < e:
-                return a
-        return None
-
-
 class SippPlanner:
     def __init__(self, graph: NetGraph, reservations: Reservations, horizon: int,
                  halt_weight: float = 250.0, headway: int = 0, max_expansions: int = 200000):
