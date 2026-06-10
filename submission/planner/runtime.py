@@ -309,6 +309,13 @@ class PlannerRuntime:
         if self.cascade:
             for other in self.res.conflicting_owners(h, g, visits):
                 self.dirty.add(other)
+        elif agent.state not in OFF_MAP_STATES:
+            # overstay rights: our start-cell stay overrides others' stale
+            # claims of it — wake all claim owners so they re-time around the
+            # truth. (Waking only the earliest claimant tested worse: the
+            # queue learns the truth too slowly and wedges form.)
+            for other in self.res.conflicting_owners(h, g, visits[:1]):
+                self.dirty.add(other)
         self.res.add_path(h, g, visits)
         self._build_actions(h, speed, agent.state in OFF_MAP_STATES,
                             start_halted=agent.state in (ST_STOPPED, ST_MALFUNCTION),

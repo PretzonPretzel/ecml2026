@@ -148,6 +148,14 @@ class Reservations:
                     owners.add(a)
         return owners
 
+    def earliest_conflicting_owner(self, agent: int, graph: NetGraph, cv: CellVisit):
+        """Owner of the earliest reservation overlapping the visit, or None."""
+        res = graph.resource_of_node(cv.node)
+        for s, e, a in self.intervals.get(res, ()):
+            if a != agent and a >= 0 and s < cv.t_exit and cv.t_enter < e:
+                return a
+        return None
+
 
 class SippPlanner:
     def __init__(self, graph: NetGraph, reservations: Reservations, horizon: int,
@@ -229,6 +237,9 @@ class SippPlanner:
         parents: Dict[Tuple[int, int, int], Tuple[Optional[Tuple], int, bool]] = {}
 
         free_halt_keys = set()  # states whose in-cell wait is free (already stopped)
+        overstay_keys = set()   # start states: we PHYSICALLY occupy the cell, so
+        # others' reservations of it are stale fiction — we may stay as long as
+        # needed (otherwise queued trains behind a breakdown can never replan).
         for (t0, fr0, node0, halted0) in start_states:
             hh = h(node0, fr0)
             if hh == INF:
@@ -239,6 +250,8 @@ class SippPlanner:
             parents[key] = (None, t0, halted0)
             if halted0:
                 free_halt_keys.add(key)
+            if start_on_map:
+                overstay_keys.add(key)
             heapq.heappush(openq, (cost0 + hh, cost0, t0, node0, fr0, 0, key))
 
         goal_key = None
@@ -254,9 +267,12 @@ class SippPlanner:
                 goal_key = key
                 break
             res_u = g.resource_of_node(node)
-            free_til = self.res.free_until(res_u, t)
-            if free_til <= t:
-                continue  # should not happen: we entered an occupied cell
+            if key in overstay_keys:
+                free_til = horizon
+            else:
+                free_til = self.res.free_until(res_u, t)
+                if free_til <= t:
+                    continue  # should not happen: we entered an occupied cell
             # nonstop exit time
             k = (q - fr + p - 1) // p  # ceil((q-fr)/p) steps to exit
             exit_nonstop = t + k
