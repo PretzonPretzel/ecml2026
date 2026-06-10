@@ -17,6 +17,7 @@ Costs are in "reward points" ~ steps: cost = arrival_time - earliest_possible
 remaining travel time.
 """
 import heapq
+import os
 from bisect import bisect_right, insort
 from fractions import Fraction
 from typing import Dict, List, NamedTuple, Optional, Tuple
@@ -27,6 +28,11 @@ from .netgraph import NetGraph
 
 INF = float("inf")
 UNREACH = 65535
+# directional locks only for corridors at least this long: short corridors
+# resolve fine via cell reservations, locking them over-serializes stations.
+# 20 measured best (storm 1.3244, curriculum 25.35 @ 100%): locks cover only
+# the ~10 longest arteries where opposing face-offs actually form.
+LOCK_MIN_LEN = int(os.environ.get("PLANNER_LOCK_MIN_LEN", "20"))
 
 
 class CellVisit(NamedTuple):
@@ -37,7 +43,10 @@ class CellVisit(NamedTuple):
 
 
 class Reservations:
-    """Shared reservation table over resources."""
+    """Shared reservation table over resources, plus directional corridor
+    locks: a plan traversing a single-track corridor locks it for its
+    direction and time window so opposing plans schedule around it
+    (same-direction platooning remains free)."""
 
     def __init__(self, horizon: int):
         self.horizon = horizon
@@ -45,6 +54,27 @@ class Reservations:
         self.intervals: Dict[int, List[Tuple[int, int, int]]] = {}
         # (t, res) -> (to_res, agent): an agent vacates res at t moving into to_res
         self.vacate_to: Dict[Tuple[int, int], Tuple[int, int]] = {}
+        # corridor seg -> sorted list of (start, end, sense, agent)
+        self.corridor_locks: Dict[int, List[Tuple[int, int, int, int]]] = {}
+
+    @staticmethod
+    def _corridor_runs(graph: NetGraph, visits: List[CellVisit]):
+        """Yield (seg, sense, t_start, t_end) for maximal corridor runs."""
+        run_seg = -1
+        run_sense = -1
+        run_start = run_end = 0
+        for cv in visits:
+            seg = graph.corridor_id[cv.node // 4]
+            sense = graph.corridor_sense[cv.node] if seg >= 0 else -1
+            if seg >= 0 and seg == run_seg:
+                run_end = cv.t_exit
+                continue
+            if run_seg >= 0:
+                yield (run_seg, run_sense, run_start, run_end)
+            run_seg, run_sense = (seg, sense) if seg >= 0 else (-1, -1)
+            run_start, run_end = cv.t_enter, cv.t_exit
+        if run_seg >= 0:
+            yield (run_seg, run_sense, run_start, run_end)
 
     # --- mutation ------------------------------------------------------
     def add_path(self, agent: int, graph: NetGraph, visits: List[CellVisit]):
@@ -55,6 +85,10 @@ class Reservations:
             if prev_res is not None:
                 self.vacate_to[(cv.t_enter, prev_res)] = (res, agent)
             prev_res = res
+        if len(visits) >= 2:  # stubs (single-cell blocks) are not traversals
+            for seg, sense, t1, t2 in self._corridor_runs(graph, visits):
+                if len(graph.corridor_cells[seg]) >= LOCK_MIN_LEN:
+                    insort(self.corridor_locks.setdefault(seg, []), (t1, t2, sense, agent))
 
     def remove_agent_path(self, agent: int, graph: NetGraph, visits: List[CellVisit]):
         prev_res = None
@@ -71,6 +105,27 @@ class Reservations:
                 if cur is not None and cur[1] == agent:
                     del self.vacate_to[(cv.t_enter, prev_res)]
             prev_res = res
+        if len(visits) >= 2:
+            for seg, sense, t1, t2 in self._corridor_runs(graph, visits):
+                if len(graph.corridor_cells[seg]) >= LOCK_MIN_LEN:
+                    lst = self.corridor_locks.get(seg)
+                    if lst is not None:
+                        try:
+                            lst.remove((t1, t2, sense, agent))
+                        except ValueError:
+                            pass
+
+    def opposing_lock_until(self, seg: int, sense: int, t1: int, t2: int, agent: int) -> int:
+        """If an opposing-sense lock overlaps [t1, t2), return the latest
+        end among overlapping opposing locks (i.e. earliest safe entry).
+        Returns -1 if free."""
+        out = -1
+        for s, e, sn, a in self.corridor_locks.get(seg, ()):
+            if a == agent or sn == sense or sn == -1 or sense == -1:
+                continue
+            if s < t2 and t1 < e:
+                out = max(out, e)
+        return out
 
     def block(self, agent: int, res: int, t_from: int, t_to: int):
         """Hard block (e.g. malfunctioning train sitting in a cell)."""
@@ -280,15 +335,33 @@ class SippPlanner:
                 continue
             new_fr = fr + k * p - q  # fraction numerator on entering successor
             halt_w = 0.0 if key in free_halt_keys else halt_weight
+            seg_u = g.corridor_id[node // 4]
+            spc = (q + p - 1) // p  # max steps per cell at this speed
             for v_node in g.successors(node):
                 if dist[v_node] == UNREACH and v_node not in goal_nodes:
                     continue
                 res_v = g.resource_of_node(v_node)
+                seg_v = g.corridor_id[v_node // 4]
+                est_transit = 0
+                if seg_v >= 0 and seg_v != seg_u and len(g.corridor_cells[seg_v]) >= LOCK_MIN_LEN:
+                    est_transit = len(g.corridor_cells[seg_v]) * spc + 10
                 # candidate entry times into v: earliest in each safe interval of res_v
                 for s, e in self.res.safe_intervals(res_v, exit_nonstop):
                     if s > free_til:  # cannot wait in u beyond free_til
                         break
                     tau = max(exit_nonstop, s + hw if s > 0 else s)
+                    # directional corridor lock: entering an artery against an
+                    # opposing planned traversal is forbidden; wait it out
+                    if est_transit:
+                        sense_v = g.corridor_sense[v_node]
+                        for _ in range(8):
+                            lock_end = self.res.opposing_lock_until(
+                                seg_v, sense_v, tau, tau + est_transit, agent)
+                            if lock_end < 0:
+                                break
+                            tau = lock_end
+                        if tau >= e or tau > free_til:
+                            continue
                     # swap protection: occupant of res_v vacating into res_u at tau
                     while tau < e:
                         vt = self.res.vacate_to.get((tau, res_v))
