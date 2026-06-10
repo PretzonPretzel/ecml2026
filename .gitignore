@@ -177,3 +177,7 @@ cython_debug/
 
 /reinforcement_learning/curriculum/curriculum/
 /outputs/
+
+# local dev artifacts
+reinforcement_learning/curriculum/curriculum/
+dev/__pycache__/

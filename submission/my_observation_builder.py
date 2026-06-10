@@ -1,3 +1,3 @@
-from flatland.core.env_observation_builder import DummyObservationBuilder
+from submission.or_policy import PlannerObsBuilder
 
-MyObservationBuilder = DummyObservationBuilder
+MyObservationBuilder = PlannerObsBuilder

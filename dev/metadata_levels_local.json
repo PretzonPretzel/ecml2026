@@ -1,0 +1,44 @@
+{
+  "levels": [
+    {
+      "name": "level_1_like",
+      "defaults": {
+        "timetableSpecs": {
+          "trainCategories": {
+            "IC": {"initialShift": [0, 40], "periodicity": [55, 75], "times": 6, "travelFactor": 1.3},
+            "RE": {"initialShift": [0, 40], "periodicity": [55, 75], "times": 6, "travelFactor": 1.3},
+            "S":  {"initialShift": [0, 40], "periodicity": [55, 75], "times": 6, "travelFactor": 1.3},
+            "C":  {"initialShift": [0, 40], "periodicity": [55, 75], "times": 6, "travelFactor": 1.3}
+          }
+        }
+      },
+      "scenarios": [
+        {
+          "name": "scenario_1",
+          "timetableSpecs": {"attributeFilter": {"key": "scene", "val": "scene_1"}},
+          "seed": 42
+        }
+      ]
+    },
+    {
+      "name": "level_2_like",
+      "defaults": {
+        "timetableSpecs": {
+          "trainCategories": {
+            "IC": {"initialShift": [0, 30], "periodicity": [28, 40], "times": 15, "travelFactor": 1.1},
+            "RE": {"initialShift": [0, 30], "periodicity": [28, 40], "times": 15, "travelFactor": 1.1},
+            "S":  {"initialShift": [0, 30], "periodicity": [28, 40], "times": 15, "travelFactor": 1.1},
+            "C":  {"initialShift": [0, 30], "periodicity": [28, 40], "times": 15, "travelFactor": 1.1}
+          }
+        }
+      },
+      "scenarios": [
+        {
+          "name": "scenario_1",
+          "timetableSpecs": {"attributeFilter": {"key": "scene", "val": "scene_1"}},
+          "seed": 43
+        }
+      ]
+    }
+  ]
+}

@@ -1,3 +1,3 @@
-from submission.random_policy import RandomPolicy
+from submission.or_policy import PlannerPolicy
 
-MyPolicy = RandomPolicy
+MyPolicy = PlannerPolicy
