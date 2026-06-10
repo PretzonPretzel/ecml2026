@@ -58,7 +58,9 @@ jobs:
           mkdir outputs
           chmod a+rwx outputs
           
-          docker run -v ./outputs/:/tmp submission/mysolution flatland-trajectory-generate-from-policy  --data-dir /tmp --callbacks-pkg flatland.callbacks.generate_movie_callbacks --callbacks-cls GenerateMovieCallbacks --rewards flatland.envs.rewards.ECML2026Rewards
+          # mirror the competition evaluator invocation (no movie callbacks:
+          # the slim image has no ffmpeg and the evaluator never asks for them)
+          docker run -v ./outputs/:/tmp submission/mysolution flatland-trajectory-generate-from-policy --data-dir /tmp --rewards flatland.envs.rewards.ECML2026Rewards --env-path reinforcement_learning/sampling/level_0_scenario_1.pkl --ep-id ci-check
           
           find outputs
           
