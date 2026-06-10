@@ -64,6 +64,9 @@ class PlannerRuntime:
         # 30-min per-scenario evaluation cap (leave room for env stepping)
         self.time_budget_s = float(os.environ.get("PLANNER_TIME_BUDGET_S", "1200"))
         self._time_spent = 0.0
+        # escape moves measured net-negative (more halts, parked trains block
+        # routes) — keep available for experimentation only
+        self.escape_moves = os.environ.get("PLANNER_ESCAPE_MOVES", "0") == "1"
         self._initialized = False
         self.graph: Optional[NetGraph] = None
         self.res: Optional[Reservations] = None
@@ -80,6 +83,7 @@ class PlannerRuntime:
         self._served: Dict[int, set] = {}  # agent -> set of served group idxs
         self._dead: set = set()            # permanently deadlocked agents
         self._corridor_block_until: Dict[int, int] = {}  # seg -> blocked-until time
+        self._last_escape: Dict[int, int] = {}
         self.BLOCK_AGENT = -7
 
     # ------------------------------------------------------------------
@@ -261,16 +265,36 @@ class PlannerRuntime:
             finally:
                 self.sipp.res = saved
 
+        if (visits is None and self.escape_moves and agent.state not in OFF_MAP_STATES
+                and ap.fails >= 1 and t - self._last_escape.get(h, -1 << 30) > 50):
+            # jam dissolution: can't reach the goal, so step out of the way.
+            visits = self._plan_escape(env, h)
+            if visits is not None:
+                self._last_escape[h] = t
+                ap.visits = visits
+                ap.cancelled = False
+                ap.idx = 0
+                self.res.add_path(h, g, visits)
+                self._build_actions(h, speed, False,
+                                    start_halted=agent.state in (ST_STOPPED, ST_MALFUNCTION),
+                                    start_frac=start_frac)
+                # brake on arrival at the parking cell, then retry the goal
+                ap.actions[visits[-1].t_enter] = STOP_MOVING
+                ap.retry_at = visits[-1].t_enter + 3
+                return True
+
         if visits is None:
             ap.cancelled = agent.state in OFF_MAP_STATES
             ap.fails += 1
             ap.retry_at = t + (10 if self.flat_backoff else min(60, 5 * (2 ** min(ap.fails, 4))))
             if agent.state not in OFF_MAP_STATES and agent.position is not None:
-                # plan-less on-map train: block its current cell so others
-                # route around it until we manage to replan it. The executor
-                # stops it so the block matches reality.
+                # plan-less on-map train: block its current cell TO HORIZON so
+                # others route around it instead of queueing head-on next to
+                # it waiting for a short stub to expire (wedge trap). The
+                # block is replaced by real reservations once a replan
+                # succeeds.
                 node = g.node_of(agent.position, int(agent.direction))
-                stub = [CellVisit(node, t, min(t + 60, self.res.horizon), False)]
+                stub = [CellVisit(node, t, self.res.horizon, False)]
                 ap.visits = None
                 ap.actions = {}
                 self._stub_blocks[h] = stub
@@ -280,6 +304,7 @@ class PlannerRuntime:
         ap.cancelled = False
         ap.idx = 0
         ap.fails = 0
+        ap.retry_at = -1
         # wake agents whose plans now conflict with this new path
         if self.cascade:
             for other in self.res.conflicting_owners(h, g, visits):
@@ -291,7 +316,76 @@ class PlannerRuntime:
         return True
 
     # ------------------------------------------------------------------
-    def _static_reservations(self, env, exclude: int) -> Reservations:
+    def _plan_escape(self, env, h: int) -> Optional[List[CellVisit]]:
+        """Short get-out-of-the-way plan for a stuck train: BFS over cells
+        free right now (and unreserved over our traversal window) to a cell
+        with breathing room, then park there. Dissolves jams edge-inward."""
+        g = self.graph
+        agent = env.agents[h]
+        if agent.position is None or agent.malfunction_handler.malfunction_down_counter > 0:
+            return None
+        t = env._elapsed_steps
+        speed = self._speeds[h]
+        p, q = speed.numerator, speed.denominator
+        steps_per_cell = (q + p - 1) // p
+
+        occupied = set()
+        for other in env.agents:
+            if other.handle != h and other.position is not None and other.state != ST_DONE:
+                occupied.add(other.position[0] * g.width + other.position[1])
+
+        start = g.node_of(agent.position, int(agent.direction))
+        # BFS over free cells
+        from collections import deque
+        prev = {start: None}
+        dq = deque([(start, 0)])
+        target = None
+        best = None
+        while dq:
+            u, depth = dq.popleft()
+            if depth > 0:
+                cell = u // 4
+                # breathing room = few occupied neighbours and not a corridor
+                # cell right next to the jam
+                free_succ = sum(1 for v in g.successors(u) if v // 4 not in occupied)
+                score = (free_succ, depth)
+                if best is None or score > best[0]:
+                    best = (score, u)
+                if depth >= 12:
+                    break
+            if depth >= 12:
+                continue
+            for v in g.successors(u):
+                if v in prev or (v // 4) in occupied:
+                    continue
+                prev[v] = u
+                dq.append((v, depth + 1))
+        if best is None:
+            return None
+        target = best[1]
+        # reconstruct node path
+        path = []
+        u = target
+        while u is not None:
+            path.append(u)
+            u = prev[u]
+        path.reverse()
+        if len(path) < 2:
+            return None
+        # timed visits: nonstop pace, park at the end until horizon
+        visits: List[CellVisit] = []
+        fr = int(Fraction(agent.speed_counter.distance) * q)
+        t_enter = t
+        for i, node in enumerate(path):
+            k = (q - fr + p - 1) // p
+            fr = fr + k * p - q
+            t_exit = t_enter + k if i + 1 < len(path) else self.res.horizon
+            visits.append(CellVisit(node, t_enter, t_exit, i + 1 == len(path)))
+            t_enter = t_exit
+        # validate against reservations (others' paths/stubs)
+        if self.res.conflicts_with(h, g, visits):
+            return None
+        return visits
         """Reservation table holding only non-negotiable occupancies: trains
         currently stopped/malfunctioning (for their known durations) and
         plan-less stubs."""
@@ -516,9 +610,9 @@ class PlannerRuntime:
                                     break
                 continue
 
+            if ap.retry_at >= 0 and t >= ap.retry_at:
+                self.dirty.add(h)  # parked escape or failed plan: retry goal
             if not ap.visits:
-                if ap.retry_at >= 0 and t >= ap.retry_at:
-                    self.dirty.add(h)
                 continue
 
             if st in OFF_MAP_STATES:
