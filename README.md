@@ -1,10 +1,6 @@
 # Winning ECML 2026 Flatland with a SIPP Train Dispatcher
 
-I spent a while last month competing in the [ECML 2026 Flatland Real-World Baselines Challenge](https://competition.flatland.cloud), and by the end of the competition my solution was sitting at rank 1. This writeup consolidates all the experimentation and implementation from my obsidian vault.
-
-The whole thing hinges on one number in the scoring rules, a braking penalty that is much larger than it should be, so we first reverse engineer the scoring, find that number, and let it decide the entire strategy. Then we build a Safe-Interval Path Planning (SIPP) dispatcher on top of a shared reservation table, benchmark it, watch it deadlock, and keep fixing it, first with swap protection and malfunction replanning, and then with the two changes that actually won the competition, overstay rights and directional corridor locks. Along the way we ship it through a fairly annoying Docker setup, read the real leaderboard, and go through every idea that sounded good and turned out to be worse. The goal is to have enough detail here to rebuild the whole thing from scratch.
-
-Everything here is plotted with a small rendering library we wrote called `flatviz`, because the stock Flatland renderer draws cartoon trains and grass and is impossible to annotate. If you want to see what an OR solver actually sees, you have to draw the rail as what it really is, which is a graph.
+This is a consolidated writeup of my [ECML 2026 Flatland Real-World Baselines Challenge solution](https://competition.flatland.cloud) that achieved rank 1 on the leaderboard. This writeup consolidates all the experimentations and implementation details from my obsidian vault, claude has been used to write parts of this writeup and structure the content, experiments and findings
 
 ## The Flatland Competition
 
@@ -289,40 +285,10 @@ At least half of the work was ideas that sounded good and tested worse, and we m
 
 The lesson here is the same one from every optimization project, which is that the reward function knows more than you do and your intuition was built on a different reward function, so you measure everything instead of trusting it.
 
-## flatviz, the plotting library
-
-Every figure in this post came out of a small library we wrote called `flatviz`, because we could not debug a scheduler we could not see. The stock `RenderTool` draws game sprites, which is nice for a demo but useless for understanding a deadlock, so `flatviz` draws the rail as the graph the solver actually reasons over, track segments between cell centers, switches as diamonds, trains as direction-pointing wedges, and everything annotatable on a plain matplotlib axis:
-
-```python
-from flatviz import RailPlot, load_env, save
-
-env = load_env("dev/big_envs/big_scene_1_a-62_ll-4.pkl")
-rp = RailPlot(env)
-fig, ax = rp.figure(title="scene 1")
-rp.draw_rail(ax)                        # track + switches
-rp.draw_agents(ax, use_state=True)      # trains colored by state
-rp.draw_targets(ax)
-rp.highlight_corridor(ax, artery_cells, label="artery")
-save(fig, "scene1.png")
-```
-
-There is a second module, `flatviz.spacetime`, for the reservation-table diagrams, so a resource axis, a time axis, occupancy rectangles, dashed safe intervals, and a train's plan as a staircase of outlined cells with halt markers. The SIPP and corridor-lock figures above are both drawn with it, and being able to render a space-time diagram of any train's plan on demand was worth a lot in debugging, because most of the bugs in this post were found by drawing the reservation table and going "that interval should not be there".
-
-The general point is that the renderer that ships with your problem is built for a human watching the simulation, but the renderer you actually need is built for the algorithm's view of the world, so resources, intervals, senses and locks, and it is usually a weekend of matplotlib that pays for itself many times over.
-
-## Where it stands
-
-At the end of the first day we were at 20.74 out of 35 and sitting at rank 1 by a 66% margin, with the corridor-locks version built, CI-verified and queued for the next day's submission slot, and those two fixes are also why the local storm numbers are so much healthier than the submitted per-level numbers, which were taken before the locks reached the leaderboard.
-
-The honest open problem is level 6. Those infrastructure disruptions drop us to 15.6% delivery, and it is a different beast from the breakdowns and delays of levels 3 to 5, probably cell-conditioned malfunctions at key junctions that our current malfunction handling does not model. That is the next few points sitting on the table, and it is where the remaining work goes, which is to reproduce the disruption mechanism locally and harden the planner against having its junctions pulled out from under a committed plan.
-
-But the shape of the whole solution is clear, and it generalizes well beyond Flatland. You read the cost function until you find the one term that dominates everything, which here was the `-250` brake, and you let that term change what you are actually optimizing for, which here went from shortest paths to paths that never stop. Then you pick the algorithm that expresses that directly, which was SIPP because it prices waiting exactly like the game prices braking, and then you spend the rest of your time on the two or three structural failures the clean algorithm does not handle, which were overstay rights and corridor locks, and you measure away everything else.
-
 ## Repository layout
 
 - **`submission/planner/`** — the dispatcher. [`netgraph.py`](submission/planner/netgraph.py) builds the `(cell, direction)` graph and detects the single-track corridors; [`sipp.py`](submission/planner/sipp.py) is Safe-Interval Path Planning over the shared reservation table, including overstay rights and the directional corridor locks; [`runtime.py`](submission/planner/runtime.py) is the plan-and-execute loop with priority planning, malfunction replanning, and the safety layers.
 - **`submission/my_policy.py`**, **`submission/my_observation_builder.py`** — the policy and env-passing observation builder the evaluator calls.
-- **`flatviz/`** — the rendering library behind every figure here: [`core.py`](flatviz/core.py) for the rail schematics, [`spacetime.py`](flatviz/spacetime.py) for the reservation-table diagrams.
 - **`dev/`** — the local evaluation harness ([`eval_lib.py`](dev/eval_lib.py), [`evaluate.py`](dev/evaluate.py)) that mirrors the server-side scoring, plus the stress environments and per-version result CSVs.
 
 ## Reproducing locally
