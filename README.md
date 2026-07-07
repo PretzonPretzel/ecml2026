@@ -6,17 +6,15 @@ This is a consolidated writeup of my [ECML 2026 Flatland Real-World Baselines Ch
 
 Flatland is a train scheduling problem where we are given a railway, a fleet of trains with timetables, and we have to route every train to its destination without them crashing into each other. The competition fixes one railway topology, a 120x150 grid with 28 stations, and has 7 difficulty levels, 5 scenarios each, for 35 scored episodes. Each scenario spawns anywhere from 8 to 532 trains onto that same map. Here is what one scenario with 25 trains looks like in Flatland's own renderer, cartoon trains and grass and all:
 
-![The same scenario in Flatland's own renderer, cartoon trains and grass](assets/flatland_hero_stock.png)
-
-It looks nice, but there is no way to annotate a reservation-table conflict or a corridor deadlock on top of grass sprites, so we redraw the exact same scenario with `flatviz`, as the graph an OR solver actually reasons over:
-
-![The same scenario redrawn by flatviz as the graph the solver reasons over](assets/flatland_hero.png)
+| | |
+| --- | --- |
+| ![The same scenario in Flatland's own renderer, cartoon trains and grass](assets/flatland_hero_stock.png) | ![The same scenario redrawn by flatviz as the graph the solver reasons over](assets/flatland_hero.png) | 
 
 Every train starts on the map at some origin and has to reach a destination, which are the red stars, and the grey diamonds are switches. The dense knot of switches in the middle is a station throat, where a lot of routes funnel together and most of the interesting conflicts happen. Each cell has a set of allowed entry to exit direction transitions, which means a train entering a cell heading north can only leave in the directions that cell permits for a northbound entry, so most cells have exactly one exit, but a switch has a real routing choice:
 
 ![A switch is a routing choice: each (cell, heading) is a graph node](assets/flatland_junction.png)
 
-This is why the natural state space is not cells but `(cell, direction)` pairs. A train at cell `(r, c)` heading east is a different search node from the same train heading west, because they can do different things next. We encode a node as `((r * W) + c) * 4 + d` and the whole planner lives on this directed graph of `4 * H * W` nodes, and a switch is just a node where some entry direction has more than one successor.
+A train at cell `(r, c)` heading east is a different search node from the same train heading west, because they can do different things next. We encode a node as `((r * W) + c) * 4 + d` and the whole planner lives on this directed graph of `4 * H * W` nodes, and a switch is just a node where some entry direction has more than one successor.
 
 On top of the geometry sits a timetable. Each train has an earliest departure, a latest arrival, and a list of intermediate stops it is supposed to serve on the way, so think of an intercity that calls at three platforms before its terminus:
 
