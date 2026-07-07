@@ -1,0 +1,3 @@
+[submodule "flatland-book"]
+	path = flatland-book
+	url = git@github.com:flatland-association/flatland-book.git
