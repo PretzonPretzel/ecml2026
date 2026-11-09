@@ -181,3 +181,4 @@ cython_debug/
 # local dev artifacts
 reinforcement_learning/curriculum/curriculum/
 dev/__pycache__/
+.DS_Store
