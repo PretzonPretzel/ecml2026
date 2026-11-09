@@ -1,0 +1,2 @@
+cancellation,collision,env,halts,intermediate_early_departure,intermediate_late_arrival,intermediate_not_served,load_s,max_steps,n_agents,normalized_reward,pct_done,run_s,steps,target_late_arrival,target_not_reached,target_not_reached_minimum_penalty
+0.0,0.0,00_scene_1_ll-2_a-1,0,0.0,0.0,0.0,0.1,146,1,1.0,1.0,0.2,87,0.0,0.0,0.0
